@@ -103,7 +103,7 @@ class ScreenCaptureService : Service() {
             isRunning = true
 
             // 启动浮动控制悬浮窗
-            FloatingOverlayService.show(this)
+            FloatingOverlayService.show(applicationContext)
         } catch (e: Exception) {
             e.printStackTrace()
             stopCapture()
