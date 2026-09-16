@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:gravity="center_horizontal"
+    android:background="#15202B">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="X 自动长截图助手"
+        android:textColor="#FFFFFF"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="针对 X 底部固定回复栏（Reply Dock）智能防误触与无缝拼接"
+        android:textColor="#8899A6"
+        android:textSize="13sp"
+        android:gravity="center"
+        android:layout_marginBottom="32dp" />
+
+    <Button
+        android:id="@+id/btn_accessibility"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:text="1. 开启无障碍自动滚动服务"
+        android:backgroundTint="#1D9BF0"
+        android:textColor="#FFFFFF"
+        android:layout_marginBottom="16dp" />
+
+    <Button
+        android:id="@+id/btn_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:text="2. 授予悬浮窗显示权限"
+        android:backgroundTint="#273340"
+        android:textColor="#FFFFFF"
+        android:layout_marginBottom="16dp" />
+
+    <Button
+        android:id="@+id/btn_start_service"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:text="3. 启动截屏悬浮控制球"
+        android:backgroundTint="#00BA7C"
+        android:textColor="#FFFFFF"
+        android:layout_marginBottom="24dp" />
+
+    <TextView
+        android:id="@+id/tv_crop_info"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="底部固定回复栏裁剪比例: 12%"
+        android:textColor="#FFFFFF"
+        android:layout_marginBottom="8dp" />
+
+    <SeekBar
+        android:id="@+id/seek_crop"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="25"
+        android:progress="12" />
+
+</LinearLayout>
