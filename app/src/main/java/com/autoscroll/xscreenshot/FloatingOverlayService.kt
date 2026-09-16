@@ -106,7 +106,7 @@ class FloatingOverlayService : Service() {
             background = btnBg
             setPadding(28, 12, 28, 12)
             setOnClickListener {
-                (this, statusText)
+                toggleCaptureProcess(this, statusText)
             }
         }
 
