@@ -187,7 +187,9 @@ class FloatingOverlayService : Service() {
                 val screenH = metrics.heightPixels
 
                 // 底部避让：X 的固定回复栏 + 手机系统导航条（约 300px）
-                val bottomExclude = 300
+                // 动态读取主界面滑块设置的避让高度（默认 280px）
+                val prefs = getSharedPreferences("app_config", Context.MODE_PRIVATE)
+                val bottomExclude = prefs.getInt("bottom_crop_px", 280)
                 // 顶部避让：状态栏与 X 标题栏（约 200px）
                 val topExclude = 200
 
