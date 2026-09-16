@@ -1,21 +1,48 @@
 name: Build Android APK
 on: [push, workflow_dispatch]
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew || true
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
       - name: Build with Gradle
-        run: ./gradlew assembleDebug
+        run: |
+          # 自动寻找 build.gradle / settings.gradle 所在的实际工程根目录
+          PROJECT_DIR=$(find . -name "settings.gradle.kts" -o -name "settings.gradle" | head -n 1 | xargs -r dirname)
+          if [ -z "$PROJECT_DIR" ]; then
+            PROJECT_DIR="."
+          fi
+          echo "Building in project directory: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
+          
+          # 如果没有 gradlew，直接使用 runner 环境自带的 gradle 包装并构建
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --stacktrace
+          else
+            echo "gradlew not found, initializing wrapper and building with system gradle..."
+            gradle wrapper --gradle-version 8.4
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --stacktrace
+          fi
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: X-Longshot-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: "**/build/outputs/apk/debug/*.apk"
