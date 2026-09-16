@@ -86,23 +86,29 @@ class ScreenCaptureService : Service() {
             .setOngoing(true)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+
+            val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = mpManager.getMediaProjection(resultCode, data)
+            setupVirtualDisplay()
+            isRunning = true
+
+            // 启动浮动控制悬浮窗
+            FloatingOverlayService.show(this)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            stopCapture()
+            stopSelf()
         }
-
-        val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = mpManager.getMediaProjection(resultCode, data)
-        setupVirtualDisplay()
-        isRunning = true
-
-        // 启动浮动控制悬浮窗
-        FloatingOverlayService.show(this)
     }
 
     private fun setupVirtualDisplay() {
