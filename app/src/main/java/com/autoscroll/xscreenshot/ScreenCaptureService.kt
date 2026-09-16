@@ -60,7 +60,12 @@ class ScreenCaptureService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 val resultCode = intent.getIntExtra("RESULT_CODE", Activity.RESULT_CANCELED)
-                val data = intent.getParcelableExtra<Intent>("DATA")
+                val data: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra("DATA", Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra("DATA")
+                }
                 if (data != null && resultCode == Activity.RESULT_OK) {
                     startForegroundService(resultCode, data)
                 }
