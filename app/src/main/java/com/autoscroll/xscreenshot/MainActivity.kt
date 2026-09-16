@@ -77,9 +77,18 @@ class MainActivity : AppCompatActivity() {
             captureLauncher.launch(mpManager.createScreenCaptureIntent())
         }
 
+        val prefs = getSharedPreferences("app_config", Context.MODE_PRIVATE)
+        val savedCrop = prefs.getInt("bottom_crop_px", 280)
+        seekBottomCrop.progress = savedCrop
+        tvBottomCropValue.text = "底部避让高度: ${savedCrop} px (推荐 X 设为 260~320px)"
+
         seekBottomCrop.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                tvBottomCropValue.text = "底部避让高度: ${progress} px (推荐 X 设为 260px)"
+                val actualValue = progress.coerceAtLeast(100)
+                tvBottomCropValue.text = "底部避让高度: ${actualValue} px (推荐 X 设为 260~320px)"
+                if (fromUser) {
+                    prefs.edit().putInt("bottom_crop_px", actualValue).apply()
+                }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
