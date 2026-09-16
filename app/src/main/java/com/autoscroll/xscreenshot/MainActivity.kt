@@ -29,7 +29,11 @@ class MainActivity : AppCompatActivity() {
                 putExtra("RESULT_CODE", result.resultCode)
                 putExtra("DATA", result.data)
             }
-            startService(serviceIntent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
             Toast.makeText(this, "截屏服务已就绪，请切换到 X 帖子页面", Toast.LENGTH_LONG).show()
         }
     }
