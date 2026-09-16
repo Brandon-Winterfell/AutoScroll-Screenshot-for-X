@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MaterialComponents.DayNight.DarkActionBar" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.MaterialComponents.DayNight.DarkActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="colorPrimary">#1D9BF0</item>
+        <item name="colorPrimaryDark">#15202B</item>
+        <item name="colorAccent">#00BA7C</item>
         <item name="android:statusBarColor">#15202B</item>
+        <item name="android:navigationBarColor">#15202B</item>
     </style>
 </resources>
