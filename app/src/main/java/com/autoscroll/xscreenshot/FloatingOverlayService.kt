@@ -177,25 +177,33 @@ class FloatingOverlayService : Service() {
             isCapturing = true
             button.text = "停止保存"
             btnBg?.setColor(Color.parseColor("#00BA7C"))
-            statusText.text = "录制第 1 屏..."
+            statusText.text = "截取第 1 屏..."
 
             val capturedList = ArrayList<android.graphics.Bitmap>()
 
             scope.launch {
-                // 1. 先截取当前首屏
-                delay(600)
-                captureService.captureCurrentFrame()?.let { capturedList.add(it) }
+                val metrics = resources.displayMetrics
+                val screenW = metrics.widthPixels
+                val screenH = metrics.heightPixels
+
+                // 针对 X 与 Android 导航栏的黄金裁切高度
+                // 顶部状态栏+标题栏约 220px，底部回复框+系统导航栏约 340px
+                val topExclude = 220
+                val bottomExclude = 340
+
+                // 1. 首屏截图（截图时临时把悬浮球隐身，避免悬浮球被截进图里）
+                delay(500)
+                captureWithHiddenOverlay(captureService)?.let { capturedList.add(it) }
 
                 var step = 1
                 while (isCapturing && isActive) {
-                    val metrics = resources.displayMetrics
-                    // 避开 X 顶部栏与底部固定发推栏
+                    // 2. 模拟真实阻尼平滑滑动（滑动距离严格对应内容区域高度）
                     accessibility.performSafeScroll(
-                        screenWidth = metrics.widthPixels,
-                        screenHeight = metrics.heightPixels,
-                        topExclusionPx = 220,
-                        bottomExclusionPx = 280,
-                        durationMs = 450L
+                        screenWidth = screenW,
+                        screenHeight = screenH,
+                        topExclusionPx = topExclude,
+                        bottomExclusionPx = bottomExclude,
+                        durationMs = 500L
                     ) { success ->
                         if (success) {
                             step++
@@ -203,29 +211,27 @@ class FloatingOverlayService : Service() {
                         }
                     }
 
-                    // 等待页面滚动完成并静止渲染
-                    delay(1200)
+                    // 等待页面滚动完成并让 X 帖子的图片和文本静止加载
+                    delay(1300)
 
                     if (!isCapturing || !isActive) break
 
-                    // 截取滚动后的一屏
-                    captureService.captureCurrentFrame()?.let {
+                    // 3. 截取下一屏
+                    captureWithHiddenOverlay(captureService)?.let {
                         capturedList.add(it)
                     }
                 }
 
-                // 停止后进入拼接与保存流程
+                // 4. 用户点击了停止保存，进行智能无缝去重拼接
                 if (capturedList.isNotEmpty()) {
                     withContext(Dispatchers.Main) {
-                        statusText.text = "正在拼接保存..."
+                        statusText.text = "正在拼接长图..."
                     }
 
-                    // 拼接所有图片
                     val finalLongBitmap = withContext(Dispatchers.Default) {
-                        stitchBitmaps(capturedList, topExclude = 220, bottomExclude = 280)
+                        stitchSeamlessBitmaps(capturedList, topExclude, bottomExclude)
                     }
 
-                    // 保存到系统相册
                     val savedUri = withContext(Dispatchers.IO) {
                         captureService.saveBitmapToGallery(applicationContext, finalLongBitmap)
                     }
@@ -233,10 +239,10 @@ class FloatingOverlayService : Service() {
                     withContext(Dispatchers.Main) {
                         if (savedUri != null) {
                             statusText.text = "已存入相册 ✓"
-                            Toast.makeText(applicationContext, "🎉 长截图已保存到手机相册！", Toast.LENGTH_LONG).show()
+                            Toast.makeText(applicationContext, "🎉 长截图拼接完成，已保存至系统相册！", Toast.LENGTH_LONG).show()
                         } else {
                             statusText.text = "保存失败"
-                            Toast.makeText(applicationContext, "保存相册失败，请检查存储权限", Toast.LENGTH_LONG).show()
+                            Toast.makeText(applicationContext, "保存相册失败", Toast.LENGTH_SHORT).show()
                         }
                         button.text = "开始截取"
                         btnBg?.setColor(Color.parseColor("#1D9BF0"))
@@ -244,10 +250,64 @@ class FloatingOverlayService : Service() {
                 }
             }
         } else {
-            // 用户点击停止
             isCapturing = false
             statusText.text = "正在生成长图..."
         }
+    }
+
+    // 截图瞬间让悬浮窗完全透明，确保截出的图片干干净净
+    private suspend fun captureWithHiddenOverlay(service: ScreenCaptureService): android.graphics.Bitmap? {
+        return withContext(Dispatchers.Main) {
+            floatView?.visibility = View.INVISIBLE
+            delay(80) // 给系统渲染一帧的时间隐藏悬浮球
+            val bmp = service.captureCurrentFrame()
+            floatView?.visibility = View.VISIBLE
+            bmp
+        }
+    }
+
+    // 专业的流式消除接缝拼接算法
+    private fun stitchSeamlessBitmaps(
+        list: List<android.graphics.Bitmap>,
+        topExclude: Int,
+        bottomExclude: Int
+    ): android.graphics.Bitmap {
+        if (list.size == 1) {
+            // 只有一屏：只切掉底部的手机导航栏与空白，保留完整内容
+            val w = list[0].width
+            val h = (list[0].height - bottomExclude).coerceAtLeast(200)
+            return android.graphics.Bitmap.createBitmap(list[0], 0, 0, w, h)
+        }
+
+        val width = list[0].width
+        val screenHeight = list[0].height
+
+        // 真实滚动的有效内容区域高度
+        val contentHeight = (screenHeight - topExclude - bottomExclude).coerceAtLeast(100)
+
+        // 计算拼接后的总高度：首屏(切除底部) + 中间屏(切头切尾)
+        val firstScreenCleanHeight = screenHeight - bottomExclude
+        val totalHeight = firstScreenCleanHeight + (list.size - 1) * contentHeight
+
+        val resultBitmap = android.graphics.Bitmap.createBitmap(width, totalHeight, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(resultBitmap)
+
+        // 1. 绘制首屏：保留顶部状态栏和正文，底部固定回复栏被完全切掉！
+        val firstSrc = android.graphics.Rect(0, 0, width, firstScreenCleanHeight)
+        val firstDst = android.graphics.Rect(0, 0, width, firstScreenCleanHeight)
+        canvas.drawBitmap(list[0], firstSrc, firstDst, null)
+
+        var currentY = firstScreenCleanHeight
+
+        // 2. 依次拼接后续屏：上方切除顶部固定栏，下方切除底部固定回复栏，只拼接纯动态内容
+        for (i in 1 until list.size) {
+            val src = android.graphics.Rect(0, topExclude, width, topExclude + contentHeight)
+            val dst = android.graphics.Rect(0, currentY, width, currentY + contentHeight)
+            canvas.drawBitmap(list[i], src, dst, null)
+            currentY += contentHeight
+        }
+
+        return resultBitmap
     }
 
     // 智能垂直拼接 Bitmap 并避开 X 底部固定 Dock 栏
