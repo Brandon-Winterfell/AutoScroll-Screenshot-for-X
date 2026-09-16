@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">X 自动长截图</string>
+    <string name="accessibility_description">用于在 X 帖子详情页自动向上平滑滚动，并智能避让底部固定回复栏以防误唤起软键盘。</string>
+</resources>
