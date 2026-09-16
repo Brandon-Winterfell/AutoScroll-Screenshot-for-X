@@ -4,8 +4,9 @@ on: [push, workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
@@ -14,35 +15,18 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.4'
 
-      - name: Build with Gradle
+      - name: Build Debug APK
         run: |
-          # 自动寻找 build.gradle / settings.gradle 所在的实际工程根目录
-          PROJECT_DIR=$(find . -name "settings.gradle.kts" -o -name "settings.gradle" | head -n 1 | xargs -r dirname)
-          if [ -z "$PROJECT_DIR" ]; then
-            PROJECT_DIR="."
-          fi
-          echo "Building in project directory: $PROJECT_DIR"
-          cd "$PROJECT_DIR"
-          
-          # 如果没有 gradlew，直接使用 runner 环境自带的 gradle 包装并构建
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --stacktrace
-          else
-            echo "gradlew not found, initializing wrapper and building with system gradle..."
-            gradle wrapper --gradle-version 8.4
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --stacktrace
-          fi
+          gradle assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: X-Longshot-Debug-APK
-          path: "**/build/outputs/apk/debug/*.apk"
+          name: AutoScroll-X-Screenshot-Debug-APK
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
