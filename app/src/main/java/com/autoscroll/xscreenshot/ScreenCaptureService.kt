@@ -99,13 +99,24 @@ class ScreenCaptureService : Service() {
 
             val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             mediaProjection = mpManager.getMediaProjection(resultCode, data)
+
+            // Android 14 强制要求注册 Callback，否则无法创建 VirtualDisplay
+            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    stopCapture()
+                }
+            }, Handler(Looper.getMainLooper()))
+
             setupVirtualDisplay()
             isRunning = true
 
-            // 启动浮动控制悬浮窗
-            FloatingOverlayService.show(applicationContext)
+            // 弹出悬浮控制球
+            FloatingOverlayService.show(this)
         } catch (e: Exception) {
             e.printStackTrace()
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(applicationContext, "启动失败原因: ${e.message}", Toast.LENGTH_LONG).show()
+            }
             stopCapture()
             stopSelf()
         }
