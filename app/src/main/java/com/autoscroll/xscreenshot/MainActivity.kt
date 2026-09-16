@@ -24,6 +24,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            // 1. 启动录屏前台服务
             val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
                 action = ScreenCaptureService.ACTION_START
                 putExtra("RESULT_CODE", result.resultCode)
@@ -34,7 +35,11 @@ class MainActivity : AppCompatActivity() {
             } else {
                 startService(serviceIntent)
             }
-            Toast.makeText(this, "截屏服务已就绪，请切换到 X 帖子页面", Toast.LENGTH_LONG).show()
+
+            // 2. 双重保障：直接由 Activity 唤起悬浮胶囊控制球
+            FloatingOverlayService.show(this)
+
+            Toast.makeText(this, "服务已启动，请切换到 X 应用！", Toast.LENGTH_SHORT).show()
         }
     }
 
