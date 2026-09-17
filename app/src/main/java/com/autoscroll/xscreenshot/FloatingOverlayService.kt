@@ -350,9 +350,10 @@ class FloatingOverlayService : Service() {
                 }
             }
 
-            // 精准缝合：旧图在 anchorY 切齐，新图从 bestMatchY 顺接，实现 0 重影缝合
-            val validOldHeight = anchorY
-            val appendStartY = if (bestMatchY >= 0) bestMatchY else topExclude + 150
+            // 黄金接缝点：完整保留旧图的特征行文字（避免在文字笔画内部切割导致切脚），
+            // 新图严格从特征行下方接续，实现 100% 完整笔画与自然行距！
+            val validOldHeight = if (bestMatchY >= 0) anchorY + templateH else anchorY
+            val appendStartY = if (bestMatchY >= 0) bestMatchY + templateH else topExclude + 150
             val appendEndY = screenHeight - bottomExclude
             val appendHeight = (appendEndY - appendStartY).coerceAtLeast(0)
 
