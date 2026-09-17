@@ -73,8 +73,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnStartService.setOnClickListener {
-            val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            captureLauncher.launch(mpManager.createScreenCaptureIntent())
+            if (ScreenCaptureService.isRunning) {
+                // 如果截屏服务原本就在运行，直接重显悬浮窗，不需要重复请求系统录屏权限
+                FloatingOverlayService.show(this)
+                Toast.makeText(this, "悬浮控制球已恢复显示！", Toast.LENGTH_SHORT).show()
+            } else {
+                // 首次启动，调起系统录屏授权
+                val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                captureLauncher.launch(mpManager.createScreenCaptureIntent())
+            }
         }
 
         val prefs = getSharedPreferences("app_config", Context.MODE_PRIVATE)
