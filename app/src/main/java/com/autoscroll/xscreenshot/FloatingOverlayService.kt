@@ -116,6 +116,11 @@ class FloatingOverlayService : Service() {
             textSize = 14f
             setPadding(16, 0, 0, 0)
             setOnClickListener {
+                // 同时停止后台录屏服务，保证状态完全复位
+                val stopIntent = Intent(this@FloatingOverlayService, ScreenCaptureService::class.java).apply {
+                    action = ScreenCaptureService.ACTION_STOP
+                }
+                startService(stopIntent)
                 stopSelf()
             }
         }
