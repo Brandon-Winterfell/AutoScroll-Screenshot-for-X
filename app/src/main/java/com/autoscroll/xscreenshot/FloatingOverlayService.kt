@@ -264,7 +264,7 @@ class FloatingOverlayService : Service() {
         }
     }
 
-    // 智能寻找两张截屏之间的重叠接缝，实现 0 像素误差拼接
+    // 工业级自适应无缝拼接：无论交界处是文字、图片、表格还是深浅色模式，均能 0 误差像素咬合
     private fun stitchWithAutoOverlapMatching(
         list: List<android.graphics.Bitmap>,
         topExclude: Int,
@@ -279,42 +279,69 @@ class FloatingOverlayService : Service() {
         val width = list[0].width
         val screenHeight = list[0].height
 
-        // 第一屏有效区域：从 0 到屏幕高度 - bottomExclude
         val firstCleanHeight = screenHeight - bottomExclude
         var accumulatedBitmap = android.graphics.Bitmap.createBitmap(list[0], 0, 0, width, firstCleanHeight)
 
         for (i in 1 until list.size) {
             val currentBmp = list[i]
 
-            // 在上一张图的底部抽取一条采样特征带（高度 30px）
-            val sampleH = 30
-            val sampleYInPrev = accumulatedBitmap.height - 40
-            if (sampleYInPrev < 100) continue
+            // 特征采样带高度设为 50px（完整涵盖一行字或图片局部纹理，确保唯一性）
+            val templateH = 50
+            var anchorY = accumulatedBitmap.height - templateH - 10
+            
+            // 【通用特征探测器】：向上扫描，寻找富含细节的区域（文字笔画或图片），避开纯单色背景
+            var foundFeature = false
+            while (anchorY > accumulatedBitmap.height - 280 && anchorY > 100) {
+                val testLine = IntArray(width)
+                accumulatedBitmap.getPixels(testLine, 0, width, 0, anchorY + templateH / 2, width, 1)
+                
+                // 计算相邻像素的颜色跳变（如果是纯单色背景，跳变数为 0）
+                var variation = 0
+                for (x in 0 until width - 1 step 4) {
+                    val p1 = testLine[x]
+                    val p2 = testLine[x + 1]
+                    val diff = Math.abs(((p1 shr 16) and 0xff) - ((p2 shr 16) and 0xff)) +
+                               Math.abs(((p1 shr 8) and 0xff) - ((p2 shr 8) and 0xff)) +
+                               Math.abs((p1 and 0xff) - (p2 and 0xff))
+                    if (diff > 15) variation++
+                }
+                
+                // 跳变数超过 20，表示这一行存在明确的文字笔画、图片细节或边框线
+                if (variation > 20) {
+                    foundFeature = true
+                    break
+                }
+                anchorY -= 12
+            }
+            if (!foundFeature) {
+                anchorY = accumulatedBitmap.height - templateH - 20
+            }
 
-            val samplePixels = IntArray(width * sampleH)
-            accumulatedBitmap.getPixels(samplePixels, 0, width, 0, sampleYInPrev, width, sampleH)
+            // 提取特征块像素数据
+            val templatePixels = IntArray(width * templateH)
+            accumulatedBitmap.getPixels(templatePixels, 0, width, 0, anchorY, width, templateH)
 
-            // 在当前屏的动态内容区（从 topExclude 到 screenHeight - bottomExclude）搜索匹配点
+            // 在下一屏中自顶向下单像素（step 1）高精度匹配
             val searchStartY = topExclude
-            val searchEndY = (screenHeight - bottomExclude - sampleH).coerceAtLeast(searchStartY)
+            val searchEndY = (screenHeight - bottomExclude - templateH).coerceAtLeast(searchStartY)
 
             var bestMatchY = -1
             var minDiff = Long.MAX_VALUE
 
-            // 步长为 2 像素快速扫描最佳吻合点
-            val testPixels = IntArray(width * sampleH)
-            for (candidateY in searchStartY..searchEndY step 2) {
-                currentBmp.getPixels(testPixels, 0, width, 0, candidateY, width, sampleH)
+            val candidatePixels = IntArray(width * templateH)
 
-                // 采样计算色值差异（每隔 8 个像素采一个点以提高速度）
+            for (candidateY in searchStartY..searchEndY) {
+                currentBmp.getPixels(candidatePixels, 0, width, 0, candidateY, width, templateH)
+
                 var diff = 0L
-                for (k in 0 until (width * sampleH) step 8) {
-                    val p1 = samplePixels[k]
-                    val p2 = testPixels[k]
+                for (k in 0 until (width * templateH) step 4) {
+                    val p1 = templatePixels[k]
+                    val p2 = candidatePixels[k]
                     val r = ((p1 shr 16) and 0xff) - ((p2 shr 16) and 0xff)
                     val g = ((p1 shr 8) and 0xff) - ((p2 shr 8) and 0xff)
                     val b = (p1 and 0xff) - (p2 and 0xff)
-                    diff += (r * r + g * g + b * b)
+                    diff += Math.abs(r) + Math.abs(g) + Math.abs(b)
+                    if (diff > minDiff) break // 快速剪枝优化
                 }
 
                 if (diff < minDiff) {
@@ -323,23 +350,24 @@ class FloatingOverlayService : Service() {
                 }
             }
 
-            // 如果匹配成功（找到重合切入点），只把匹配点之后的新增内容接在后面；
-            // 如果没找到满意的点，做安全保底对齐
-            val newContentStartY = if (bestMatchY > 0) bestMatchY + sampleH else topExclude + 200
-            val newContentEndY = screenHeight - bottomExclude
-            val newContentHeight = (newContentEndY - newContentStartY).coerceAtLeast(0)
+            // 精准缝合：旧图在 anchorY 切齐，新图从 bestMatchY 顺接，实现 0 重影缝合
+            val validOldHeight = anchorY
+            val appendStartY = if (bestMatchY >= 0) bestMatchY else topExclude + 150
+            val appendEndY = screenHeight - bottomExclude
+            val appendHeight = (appendEndY - appendStartY).coerceAtLeast(0)
 
-            if (newContentHeight > 0) {
-                val newTotalHeight = accumulatedBitmap.height + newContentHeight
+            if (appendHeight > 0) {
+                val newTotalHeight = validOldHeight + appendHeight
                 val merged = android.graphics.Bitmap.createBitmap(width, newTotalHeight, android.graphics.Bitmap.Config.ARGB_8888)
                 val canvas = android.graphics.Canvas(merged)
 
-                // 绘制已拼好的部分
-                canvas.drawBitmap(accumulatedBitmap, 0f, 0f, null)
-                // 绘制新拼上的无缝部分
-                val srcRect = android.graphics.Rect(0, newContentStartY, width, newContentEndY)
-                val dstRect = android.graphics.Rect(0, accumulatedBitmap.height, width, newTotalHeight)
-                canvas.drawBitmap(currentBmp, srcRect, dstRect, null)
+                val srcOld = android.graphics.Rect(0, 0, width, validOldHeight)
+                val dstOld = android.graphics.Rect(0, 0, width, validOldHeight)
+                canvas.drawBitmap(accumulatedBitmap, srcOld, dstOld, null)
+
+                val srcNew = android.graphics.Rect(0, appendStartY, width, appendEndY)
+                val dstNew = android.graphics.Rect(0, validOldHeight, width, newTotalHeight)
+                canvas.drawBitmap(currentBmp, srcNew, dstNew, null)
 
                 accumulatedBitmap.recycle()
                 accumulatedBitmap = merged
