@@ -3,11 +3,14 @@ package com.autoscroll.xscreenshot
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.graphics.Rect
 import android.os.*
+import android.provider.Settings
 import android.view.*
 import android.widget.*
 import kotlinx.coroutines.*
@@ -272,17 +275,20 @@ class FloatingOverlayService : Service() {
      * 2. 避免汉字笔画被水平腰斩，智能寻找行间/段落天然空白缝隙进行无痕缝合；
      * 3. 全重叠多线联合损失函数 + 1px 单像素精细对齐，无论图文混排均能 0 误差咬合。
      */
-    fun stitchWithAutoOverlapMatching(frames: List<Bitmap>): Bitmap {
+    fun stitchWithAutoOverlapMatching(
+        frames: List<Bitmap>,
+        topCutCustomPx: Int = 240,
+        bottomCutCustomPx: Int = 280
+    ): Bitmap {
         if (frames.isEmpty()) throw IllegalArgumentException("截图帧列表不能为空")
         if (frames.size == 1) return frames[0]
 
         val width = frames[0].width
         val height = frames[0].height
 
-        // 顶部状态栏及 X 标题栏固定区域 (~10% / 约 240px)
-        val topCutPx = (height * 0.10f).toInt().coerceAtLeast(220)
-        // 底部 X 固定回复栏与系统手势栏 (~12% / 约 280px)
-        val bottomCutPx = (height * 0.12f).toInt().coerceAtLeast(260)
+        // 如果调用方传入了具体的 topCut/bottomCut 则优先使用，否则自适应按屏幕比例计算
+        val topCutPx = if (topCutCustomPx > 0) topCutCustomPx else (height * 0.10f).toInt().coerceAtLeast(220)
+        val bottomCutPx = if (bottomCutCustomPx > 0) bottomCutCustomPx else (height * 0.12f).toInt().coerceAtLeast(260)
         val validBottom = height - bottomCutPx
 
         // 第 1 屏保留顶部发帖人标题信息，底部寻找天然空白行切除（避免在字中央切断）
@@ -304,7 +310,6 @@ class FloatingOverlayService : Service() {
                 validBottom = validBottom
             )
 
-            // 若滚动距离过小（说明已经滑到底部到底了），直接跳出
             if (bestDy < 30) {
                 break
             }
@@ -330,7 +335,7 @@ class FloatingOverlayService : Service() {
                 // 绘制此前已拼合的内容
                 canvas.drawBitmap(accumulatedBitmap, 0f, 0f, null)
 
-                // 绘制当前屏切片（与上一屏在空白缝隙处严丝合缝咬合）
+                // 绘制当前屏切片
                 val srcRect = Rect(0, currentStartY, width, currentEndY)
                 val dstRect = Rect(0, oldHeight, width, newTotalHeight)
                 canvas.drawBitmap(currentFrame, srcRect, dstRect, null)
