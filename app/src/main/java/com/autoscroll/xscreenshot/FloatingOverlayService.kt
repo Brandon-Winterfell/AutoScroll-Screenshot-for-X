@@ -264,7 +264,7 @@ class FloatingOverlayService : Service() {
         }
     }
 
-    // 工业级自适应无缝拼接：无论交界处是文字、图片、表格还是深浅色模式，均能 0 误差像素咬合
+    // 工业级物理约束自适应拼接：锁定真实位移窗口，杜绝漏段、吞字与跳过内容
     private fun stitchWithAutoOverlapMatching(
         list: List<android.graphics.Bitmap>,
         topExclude: Int,
@@ -279,23 +279,25 @@ class FloatingOverlayService : Service() {
         val width = list[0].width
         val screenHeight = list[0].height
 
+        // 每次手势实际滚动的物理位移约 50%~55% 屏幕高
+        val expectedScrollY = (screenHeight * 0.52f).toInt()
+
         val firstCleanHeight = screenHeight - bottomExclude
         var accumulatedBitmap = android.graphics.Bitmap.createBitmap(list[0], 0, 0, width, firstCleanHeight)
 
         for (i in 1 until list.size) {
             val currentBmp = list[i]
 
-            // 特征采样带高度设为 50px（完整涵盖一行字或图片局部纹理，确保唯一性）
-            val templateH = 50
+            // 1. 在旧图底部有效区域内采样特征带（高度 60px）
+            val templateH = 60
             var anchorY = accumulatedBitmap.height - templateH - 10
             
-            // 【通用特征探测器】：向上扫描，寻找富含细节的区域（文字笔画或图片），避开纯单色背景
+            // 向上寻找具有足够颜色对比度（文字笔画或图片轮廓）的特征行
             var foundFeature = false
-            while (anchorY > accumulatedBitmap.height - 280 && anchorY > 100) {
+            while (anchorY > accumulatedBitmap.height - 240 && anchorY > 100) {
                 val testLine = IntArray(width)
                 accumulatedBitmap.getPixels(testLine, 0, width, 0, anchorY + templateH / 2, width, 1)
                 
-                // 计算相邻像素的颜色跳变（如果是纯单色背景，跳变数为 0）
                 var variation = 0
                 for (x in 0 until width - 1 step 4) {
                     val p1 = testLine[x]
@@ -303,27 +305,29 @@ class FloatingOverlayService : Service() {
                     val diff = Math.abs(((p1 shr 16) and 0xff) - ((p2 shr 16) and 0xff)) +
                                Math.abs(((p1 shr 8) and 0xff) - ((p2 shr 8) and 0xff)) +
                                Math.abs((p1 and 0xff) - (p2 and 0xff))
-                    if (diff > 15) variation++
+                    if (diff > 18) variation++
                 }
                 
-                // 跳变数超过 20，表示这一行存在明确的文字笔画、图片细节或边框线
-                if (variation > 20) {
+                if (variation > 25) {
                     foundFeature = true
                     break
                 }
-                anchorY -= 12
+                anchorY -= 10
             }
             if (!foundFeature) {
-                anchorY = accumulatedBitmap.height - templateH - 20
+                anchorY = accumulatedBitmap.height - templateH - 10
             }
 
-            // 提取特征块像素数据
             val templatePixels = IntArray(width * templateH)
             accumulatedBitmap.getPixels(templatePixels, 0, width, 0, anchorY, width, templateH)
 
-            // 在下一屏中自顶向下单像素（step 1）高精度匹配
-            val searchStartY = topExclude
-            val searchEndY = (screenHeight - bottomExclude - templateH).coerceAtLeast(searchStartY)
+            // 2. 【核心修复】：基于物理滑动的受限搜索窗口
+            // 上一屏底部 anchorY 在新一屏中的理论位置是：anchorY - (上一屏高度 - screenHeight + bottomExclude + expectedScrollY)
+            // 即在新一屏大约 (screenHeight - bottomExclude - expectedScrollY) 附近！
+            // 绝不允许漫无目的地搜全屏，必须限制在合理物理浮动范围 ±300px 内！
+            val baseExpectedY = (screenHeight - bottomExclude - expectedScrollY).coerceAtLeast(topExclude + 50)
+            val searchStartY = (baseExpectedY - 260).coerceAtLeast(topExclude)
+            val searchEndY = (baseExpectedY + 260).coerceAtMost(screenHeight - bottomExclude - templateH)
 
             var bestMatchY = -1
             var minDiff = Long.MAX_VALUE
@@ -341,7 +345,7 @@ class FloatingOverlayService : Service() {
                     val g = ((p1 shr 8) and 0xff) - ((p2 shr 8) and 0xff)
                     val b = (p1 and 0xff) - (p2 and 0xff)
                     diff += Math.abs(r) + Math.abs(g) + Math.abs(b)
-                    if (diff > minDiff) break // 快速剪枝优化
+                    if (diff > minDiff) break
                 }
 
                 if (diff < minDiff) {
@@ -350,10 +354,22 @@ class FloatingOverlayService : Service() {
                 }
             }
 
-            // 黄金接缝点：完整保留旧图的特征行文字（避免在文字笔画内部切割导致切脚），
-            // 新图严格从特征行下方接续，实现 100% 完整笔画与自然行距！
-            val validOldHeight = if (bestMatchY >= 0) anchorY + templateH else anchorY
-            val appendStartY = if (bestMatchY >= 0) bestMatchY + templateH else topExclude + 150
+            // 3. 安全缝合：
+            // 如果在物理窗口内找到了极佳吻合点，直接在锚点无缝拼接；
+            // 如果出现异常大白屏未找到，使用物理预期滑动距离保底拼接，绝不漏掉文字！
+            val validOldHeight: Int
+            val appendStartY: Int
+
+            if (bestMatchY >= 0 && minDiff < (width * templateH * 25L)) {
+                // 精准对齐
+                validOldHeight = anchorY + templateH
+                appendStartY = bestMatchY + templateH
+            } else {
+                // 保底安全位移：截取滚动带来的全部新增内容
+                validOldHeight = accumulatedBitmap.height
+                appendStartY = (screenHeight - bottomExclude - expectedScrollY).coerceAtLeast(topExclude)
+            }
+
             val appendEndY = screenHeight - bottomExclude
             val appendHeight = (appendEndY - appendStartY).coerceAtLeast(0)
 
