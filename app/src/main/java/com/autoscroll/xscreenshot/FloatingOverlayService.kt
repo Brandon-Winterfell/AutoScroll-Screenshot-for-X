@@ -3,14 +3,15 @@ package com.autoscroll.xscreenshot
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
+import android.graphics.Rect
 import android.os.*
-import android.provider.Settings
 import android.view.*
 import android.widget.*
 import kotlinx.coroutines.*
+import kotlin.math.abs
 
 class FloatingOverlayService : Service() {
 
