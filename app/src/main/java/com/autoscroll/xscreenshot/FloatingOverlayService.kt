@@ -348,8 +348,7 @@ class FloatingOverlayService : Service() {
 
     /**
      * 固定基准块 (Fixed Reference Window) 像素级对齐引擎：
-     * 在 currBmp 顶部选取高度 260px 的固定多行特征块，在 prevBmp 中全域扫描匹配，
-     * 彻底解决变量网格采样导致误配邻近行的弊端。
+     * 支持 60px ~ 1860px 全范围大滚动位移，采用像素均值归一化，彻底解除超界过滤 bug。
      */
     private fun findExactVerticalShift(
         prevBmp: Bitmap,
@@ -360,45 +359,48 @@ class FloatingOverlayService : Service() {
         validBottom: Int
     ): Int {
         val minDy = 60
-        val maxDy = (validBottom - topCut - 160).coerceAtLeast(minDy + 40)
+        val maxDy = (validBottom - topCut - 20).coerceAtLeast(minDy + 40)
 
-        // 在 currBmp 顶部选取高度为 260px 的固定特征基准块 (避开顶部工具栏)
-        val refStartY = topCut + 40
-        val refHeight = 260.coerceAtMost(validBottom - refStartY - 80)
+        // 在 currBmp 顶部选取高度为 200px 的特征基准块 (避开顶部工具栏)
+        val refStartY = topCut + 20
+        val refHeight = 200.coerceAtMost(validBottom - refStartY - 40)
 
         val startX = (width * 0.12f).toInt()
         val endX = (width * 0.75f).toInt()
 
         // 粗搜阶段 (Coarse search): stepDy = 4, stepX = 12, stepY = 4
         var bestCoarseDy = minDy
-        var minCoarseCost = Long.MAX_VALUE
+        var minCoarseCost = Double.MAX_VALUE
 
         var dy = minDy
         while (dy <= maxDy) {
             val prevStartY = refStartY + dy
-            if (prevStartY + refHeight > validBottom) {
-                dy += 4
-                continue
-            }
-
             var totalDiff = 0L
+            var pixelCount = 0
+
             for (y in 0 until refHeight step 4) {
                 val currY = refStartY + y
                 val prevY = prevStartY + y
-                for (x in startX..endX step 12) {
-                    val p1 = prevBmp.getPixel(x, prevY)
-                    val p2 = currBmp.getPixel(x, currY)
+                if (prevY < validBottom && currY < validBottom) {
+                    for (x in startX..endX step 12) {
+                        val p1 = prevBmp.getPixel(x, prevY)
+                        val p2 = currBmp.getPixel(x, currY)
 
-                    val r = abs((p1 shr 16 and 0xff) - (p2 shr 16 and 0xff))
-                    val g = abs((p1 shr 8 and 0xff) - (p2 shr 8 and 0xff))
-                    val b = abs((p1 and 0xff) - (p2 and 0xff))
-                    totalDiff += (r + g + b)
+                        val r = abs((p1 shr 16 and 0xff) - (p2 shr 16 and 0xff))
+                        val g = abs((p1 shr 8 and 0xff) - (p2 shr 8 and 0xff))
+                        val b = abs((p1 and 0xff) - (p2 and 0xff))
+                        totalDiff += (r + g + b)
+                        pixelCount++
+                    }
                 }
             }
 
-            if (totalDiff < minCoarseCost) {
-                minCoarseCost = totalDiff
-                bestCoarseDy = dy
+            if (pixelCount > 80) {
+                val avgCost = totalDiff.toDouble() / pixelCount
+                if (avgCost < minCoarseCost) {
+                    minCoarseCost = avgCost
+                    bestCoarseDy = dy
+                }
             }
 
             dy += 4
@@ -406,33 +408,39 @@ class FloatingOverlayService : Service() {
 
         // 精搜阶段 (Fine search): 在 bestCoarseDy ± 8 范围内逐像素 (stepDy = 1, stepX = 4, stepY = 2) 高密比对
         var bestFineDy = bestCoarseDy
-        var minFineCost = Long.MAX_VALUE
+        var minFineCost = Double.MAX_VALUE
 
         val fineMin = (bestCoarseDy - 8).coerceAtLeast(minDy)
         val fineMax = (bestCoarseDy + 8).coerceAtMost(maxDy)
 
         for (fineDy in fineMin..fineMax) {
             val prevStartY = refStartY + fineDy
-            if (prevStartY + refHeight > validBottom) continue
-
             var totalDiff = 0L
+            var pixelCount = 0
+
             for (y in 0 until refHeight step 2) {
                 val currY = refStartY + y
                 val prevY = prevStartY + y
-                for (x in startX..endX step 4) {
-                    val p1 = prevBmp.getPixel(x, prevY)
-                    val p2 = currBmp.getPixel(x, currY)
+                if (prevY < validBottom && currY < validBottom) {
+                    for (x in startX..endX step 4) {
+                        val p1 = prevBmp.getPixel(x, prevY)
+                        val p2 = currBmp.getPixel(x, currY)
 
-                    val r = abs((p1 shr 16 and 0xff) - (p2 shr 16 and 0xff))
-                    val g = abs((p1 shr 8 and 0xff) - (p2 shr 8 and 0xff))
-                    val b = abs((p1 and 0xff) - (p2 and 0xff))
-                    totalDiff += (r + g + b)
+                        val r = abs((p1 shr 16 and 0xff) - (p2 shr 16 and 0xff))
+                        val g = abs((p1 shr 8 and 0xff) - (p2 shr 8 and 0xff))
+                        val b = abs((p1 and 0xff) - (p2 and 0xff))
+                        totalDiff += (r + g + b)
+                        pixelCount++
+                    }
                 }
             }
 
-            if (totalDiff < minFineCost) {
-                minFineCost = totalDiff
-                bestFineDy = fineDy
+            if (pixelCount > 80) {
+                val avgCost = totalDiff.toDouble() / pixelCount
+                if (avgCost < minFineCost) {
+                    minFineCost = avgCost
+                    bestFineDy = fineDy
+                }
             }
         }
 
