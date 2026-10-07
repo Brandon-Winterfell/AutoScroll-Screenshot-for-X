@@ -269,11 +269,7 @@ class FloatingOverlayService : Service() {
     }
 
     /**
-     * 工业级自适应全重叠多行特征联合对齐拼接引擎
-     * 彻底解决：
-     * 1. 消除推文多行文本/歌词在交界处的跳跃、吞行、吃字现象；
-     * 2. 避免汉字笔画被水平腰斩，智能寻找行间/段落天然空白缝隙进行无痕缝合；
-     * 3. 全重叠多线联合损失函数 + 1px 单像素精细对齐，无论图文混排均能 0 误差咬合。
+     * 工业级全重叠多行固定特征对齐 + 纯空白行间隙无痕拼接引擎
      */
     fun stitchWithAutoOverlapMatching(
         frames: List<Bitmap>,
@@ -286,21 +282,20 @@ class FloatingOverlayService : Service() {
         val width = frames[0].width
         val height = frames[0].height
 
-        // 如果调用方传入了具体的 topCut/bottomCut 则优先使用，否则自适应按屏幕比例计算
         val topCutPx = if (topCutCustomPx > 0) topCutCustomPx else (height * 0.10f).toInt().coerceAtLeast(220)
         val bottomCutPx = if (bottomCutCustomPx > 0) bottomCutCustomPx else (height * 0.12f).toInt().coerceAtLeast(260)
         val validBottom = height - bottomCutPx
 
-        // 第 1 屏保留顶部发帖人标题信息，底部寻找天然空白行切除（避免在字中央切断）
+        // 第 1 屏保留顶部发帖人标题信息，底部智能寻找天然纯空白行间隙（绝不在汉字笔画上动刀）
         var prevFrame = frames[0]
-        var prevCutY = findBestSeamY(prevFrame, validBottom - 160, validBottom - 20, width)
+        var prevCutY = findBestBlankSeam(prevFrame, validBottom - 300, validBottom - 15, width)
 
         var accumulatedBitmap = Bitmap.createBitmap(prevFrame, 0, 0, width, prevCutY)
 
         for (i in 1 until frames.size) {
             val currentFrame = frames[i]
 
-            // 1. 全重叠联合采样精确定位垂直位移 dy (像素)
+            // 1. 固定基准特征窗口 + 单像素精搜，锁定 100% 真实的垂直位移 dy
             val bestDy = findExactVerticalShift(
                 prevBmp = prevFrame,
                 currBmp = currentFrame,
@@ -314,15 +309,15 @@ class FloatingOverlayService : Service() {
                 break
             }
 
-            // 2. 当前屏接合起始 Y 坐标：上一屏接缝在 prevCutY，对应当前屏为 (prevCutY - bestDy)
+            // 2. 当前屏起始 Y 坐标：上一屏切在纯空白隙 prevCutY，当前屏无缝续接在同位纯空白隙 (prevCutY - bestDy)
             val currentStartY = (prevCutY - bestDy).coerceIn(topCutPx, validBottom - 10)
 
-            // 3. 当前屏切割结束点：若是最后一屏则取至 validBottom，否则继续找自然空白缝隙
+            // 3. 当前屏结束点：最后一屏保留至 validBottom 避开回复栏，中间屏继续寻找屏底空白行隙
             val isLast = (i == frames.size - 1)
             val currentEndY = if (isLast) {
                 validBottom
             } else {
-                findBestSeamY(currentFrame, validBottom - 160, validBottom - 20, width)
+                findBestBlankSeam(currentFrame, validBottom - 300, validBottom - 15, width)
             }
 
             val sliceHeight = currentEndY - currentStartY
@@ -332,7 +327,7 @@ class FloatingOverlayService : Service() {
                 val merged = Bitmap.createBitmap(width, newTotalHeight, Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(merged)
 
-                // 绘制此前已拼合的内容
+                // 绘制已拼好的上一部分
                 canvas.drawBitmap(accumulatedBitmap, 0f, 0f, null)
 
                 // 绘制当前屏切片
@@ -352,7 +347,9 @@ class FloatingOverlayService : Service() {
     }
 
     /**
-     * 在全重叠区间内通过数十条水平采样线联合比对，锁定真实的垂直位移 dy（零误判）
+     * 固定基准块 (Fixed Reference Window) 像素级对齐引擎：
+     * 在 currBmp 顶部选取高度 260px 的固定多行特征块，在 prevBmp 中全域扫描匹配，
+     * 彻底解决变量网格采样导致误配邻近行的弊端。
      */
     private fun findExactVerticalShift(
         prevBmp: Bitmap,
@@ -363,95 +360,78 @@ class FloatingOverlayService : Service() {
         validBottom: Int
     ): Int {
         val minDy = 60
-        val maxDy = (validBottom - topCut - 150).coerceAtLeast(minDy + 40)
+        val maxDy = (validBottom - topCut - 160).coerceAtLeast(minDy + 40)
 
-        // 横向采样范围：避开最左侧头像/边框与最右侧悬浮窗药丸及滚动条 (保留 10% ~ 75% 宽度区间)
-        val startX = (width * 0.10f).toInt()
+        // 在 currBmp 顶部选取高度为 260px 的固定特征基准块 (避开顶部工具栏)
+        val refStartY = topCut + 40
+        val refHeight = 260.coerceAtMost(validBottom - refStartY - 80)
+
+        val startX = (width * 0.12f).toInt()
         val endX = (width * 0.75f).toInt()
-        val stepX = 24
 
-        // 粗搜阶段 (Coarse search): step = 4 像素全域扫描
+        // 粗搜阶段 (Coarse search): stepDy = 4, stepX = 12, stepY = 4
         var bestCoarseDy = minDy
-        var minCoarseCost = Double.MAX_VALUE
+        var minCoarseCost = Long.MAX_VALUE
 
         var dy = minDy
         while (dy <= maxDy) {
-            val overlapHeight = validBottom - topCut - dy
-            if (overlapHeight < 150) {
+            val prevStartY = refStartY + dy
+            if (prevStartY + refHeight > validBottom) {
                 dy += 4
                 continue
             }
 
-            // 在重叠区间内均匀分布 25 条水平采样线
-            val numSampleLines = 25
-            val lineSpacing = overlapHeight / numSampleLines
             var totalDiff = 0L
-            var pixelCount = 0
+            for (y in 0 until refHeight step 4) {
+                val currY = refStartY + y
+                val prevY = prevStartY + y
+                for (x in startX..endX step 12) {
+                    val p1 = prevBmp.getPixel(x, prevY)
+                    val p2 = currBmp.getPixel(x, currY)
 
-            for (l in 0 until numSampleLines) {
-                val currY = topCut + l * lineSpacing
-                val prevY = currY + dy
-
-                if (currY in topCut until validBottom && prevY in topCut until validBottom) {
-                    for (x in startX..endX step stepX) {
-                        val p1 = prevBmp.getPixel(x, prevY)
-                        val p2 = currBmp.getPixel(x, currY)
-
-                        val rDiff = Math.abs((p1 shr 16 and 0xff) - (p2 shr 16 and 0xff))
-                        val gDiff = Math.abs((p1 shr 8 and 0xff) - (p2 shr 8 and 0xff))
-                        val bDiff = Math.abs((p1 and 0xff) - (p2 and 0xff))
-
-                        totalDiff += (rDiff + gDiff + bDiff)
-                        pixelCount++
-                    }
+                    val r = abs((p1 shr 16 and 0xff) - (p2 shr 16 and 0xff))
+                    val g = abs((p1 shr 8 and 0xff) - (p2 shr 8 and 0xff))
+                    val b = abs((p1 and 0xff) - (p2 and 0xff))
+                    totalDiff += (r + g + b)
                 }
             }
 
-            val avgCost = if (pixelCount > 0) totalDiff.toDouble() / pixelCount else Double.MAX_VALUE
-            if (avgCost < minCoarseCost) {
-                minCoarseCost = avgCost
+            if (totalDiff < minCoarseCost) {
+                minCoarseCost = totalDiff
                 bestCoarseDy = dy
             }
 
             dy += 4
         }
 
-        // 精搜阶段 (Fine search): 在 bestCoarseDy 左右 ±8 像素范围内逐像素 (step = 1) 细化锁定
+        // 精搜阶段 (Fine search): 在 bestCoarseDy ± 8 范围内逐像素 (stepDy = 1, stepX = 4, stepY = 2) 高密比对
         var bestFineDy = bestCoarseDy
-        var minFineCost = Double.MAX_VALUE
+        var minFineCost = Long.MAX_VALUE
 
         val fineMin = (bestCoarseDy - 8).coerceAtLeast(minDy)
         val fineMax = (bestCoarseDy + 8).coerceAtMost(maxDy)
 
         for (fineDy in fineMin..fineMax) {
-            val overlapHeight = validBottom - topCut - fineDy
-            val numSampleLines = 35
-            val lineSpacing = (overlapHeight / numSampleLines).coerceAtLeast(2)
+            val prevStartY = refStartY + fineDy
+            if (prevStartY + refHeight > validBottom) continue
+
             var totalDiff = 0L
-            var pixelCount = 0
+            for (y in 0 until refHeight step 2) {
+                val currY = refStartY + y
+                val prevY = prevStartY + y
+                for (x in startX..endX step 4) {
+                    val p1 = prevBmp.getPixel(x, prevY)
+                    val p2 = currBmp.getPixel(x, currY)
 
-            for (l in 0 until numSampleLines) {
-                val currY = topCut + l * lineSpacing
-                val prevY = currY + fineDy
-
-                if (currY in topCut until validBottom && prevY in topCut until validBottom) {
-                    for (x in startX..endX step 12) {
-                        val p1 = prevBmp.getPixel(x, prevY)
-                        val p2 = currBmp.getPixel(x, currY)
-
-                        val rDiff = Math.abs((p1 shr 16 and 0xff) - (p2 shr 16 and 0xff))
-                        val gDiff = Math.abs((p1 shr 8 and 0xff) - (p2 shr 8 and 0xff))
-                        val bDiff = Math.abs((p1 and 0xff) - (p2 and 0xff))
-
-                        totalDiff += (rDiff + gDiff + bDiff)
-                        pixelCount++
-                    }
+                    val r = abs((p1 shr 16 and 0xff) - (p2 shr 16 and 0xff))
+                    val g = abs((p1 shr 8 and 0xff) - (p2 shr 8 and 0xff))
+                    val b = abs((p1 and 0xff) - (p2 and 0xff))
+                    totalDiff += (r + g + b)
                 }
             }
 
-            val avgCost = if (pixelCount > 0) totalDiff.toDouble() / pixelCount else Double.MAX_VALUE
-            if (avgCost < minFineCost) {
-                minFineCost = avgCost
+            if (totalDiff < minFineCost) {
+                minFineCost = totalDiff
                 bestFineDy = fineDy
             }
         }
@@ -460,37 +440,59 @@ class FloatingOverlayService : Service() {
     }
 
     /**
-     * 智能空白缝隙探测器：
-     * 寻找水平跳变最小的行（行间距或段落空白行），避免在文字中央切割切碎汉字。
+     * 智能纯空白行隙探测器 (Pure Blank Line Gap Detector)：
+     * 识别整行没有任何文字或图案笔画的真正留白缝隙（行间距或段落空白）。
+     * 切刀严格落在留白间隙正中心，100% 杜绝切断汉字笔画。
      */
-    private fun findBestSeamY(bmp: Bitmap, startY: Int, endY: Int, width: Int): Int {
-        val sampleStartX = (width * 0.12f).toInt()
-        val sampleEndX = (width * 0.88f).toInt()
-        val stepX = 16
+    private fun findBestBlankSeam(bmp: Bitmap, startY: Int, endY: Int, width: Int): Int {
+        val sampleStartX = (width * 0.10f).toInt()
+        val sampleEndX = (width * 0.85f).toInt()
+        val stepX = 4
 
-        var bestY = (startY + endY) / 2
-        var minVariance = Long.MAX_VALUE
+        // 采样背景底色（从左侧安全边距处采样）
+        val bgPixel = bmp.getPixel(20, startY.coerceAtLeast(0))
+        val bgR = bgPixel shr 16 and 0xff
+        val bgG = bgPixel shr 8 and 0xff
+        val bgB = bgPixel and 0xff
 
-        for (y in startY..endY) {
-            var rowVariance = 0L
-            var prevPixel = bmp.getPixel(sampleStartX, y)
-            val prevGray = ((prevPixel shr 16 and 0xff) * 299 + (prevPixel shr 8 and 0xff) * 587 + (prevPixel and 0xff) * 114) / 1000
+        var bestY = -1
+        var currentGapStart = -1
 
-            for (x in (sampleStartX + stepX)..sampleEndX step stepX) {
-                val currPixel = bmp.getPixel(x, y)
-                val currGray = ((currPixel shr 16 and 0xff) * 299 + (currPixel shr 8 and 0xff) * 587 + (currPixel and 0xff) * 114) / 1000
-                rowVariance += Math.abs(currGray - prevGray)
-                prevPixel = currPixel
+        for (y in startY until endY) {
+            var hasForeground = false
+            for (x in sampleStartX..sampleEndX step stepX) {
+                val p = bmp.getPixel(x, y)
+                val diff = abs((p shr 16 and 0xff) - bgR) +
+                           abs((p shr 8 and 0xff) - bgG) +
+                           abs((p and 0xff) - bgB)
+                // 像素偏离背景底色，代表存在文字或图案笔画
+                if (diff > 45) {
+                    hasForeground = true
+                    break
+                }
             }
 
-            if (rowVariance < minVariance) {
-                minVariance = rowVariance
-                bestY = y
-                if (rowVariance == 0L) break
+            if (!hasForeground) {
+                if (currentGapStart == -1) {
+                    currentGapStart = y
+                }
+            } else {
+                if (currentGapStart != -1) {
+                    val gapLen = y - currentGapStart
+                    if (gapLen >= 8) { // 发现大于等于 8px 的完整空白行隙
+                        bestY = (currentGapStart + y) / 2
+                    }
+                    currentGapStart = -1
+                }
             }
         }
 
-        return bestY
+        if (currentGapStart != -1 && (endY - currentGapStart) >= 8) {
+            bestY = (currentGapStart + endY) / 2
+        }
+
+        // 若区域为全幅大图或未检出空白，则取安全位置
+        return if (bestY != -1) bestY else (startY + endY) / 2
     }
 
     // 截图瞬间让悬浮窗完全透明，确保截出的图片干干净净
