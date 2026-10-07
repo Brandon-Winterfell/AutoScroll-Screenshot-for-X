@@ -57,10 +57,11 @@ class AutoScrollAccessibilityService : AccessibilityService() {
     ) {
         val centerX = (screenWidth / 2f)
 
-        // 触点从避让区上方 30px 开始向上滑动
-        val safeStartY = (screenHeight - bottomExclusionPx - 30).toFloat()
-        // 滑动终点落在顶部避让区下方 60px
-        val safeEndY = (topExclusionPx + 60).toFloat()
+        // 每次向上滚动有效显示区的约 60% 距离，留出 40% 的宽裕重叠区保证两屏之间绝对连贯且特征充足
+        val availableHeight = (screenHeight - bottomExclusionPx - topExclusionPx).toFloat()
+        val scrollDistance = (availableHeight * 0.60f).coerceIn(600f, 1300f)
+        val safeStartY = (screenHeight - bottomExclusionPx - 40).toFloat()
+        val safeEndY = (safeStartY - scrollDistance).coerceAtLeast((topExclusionPx + 80).toFloat())
 
         if (safeStartY <= safeEndY) {
             onComplete(false)
