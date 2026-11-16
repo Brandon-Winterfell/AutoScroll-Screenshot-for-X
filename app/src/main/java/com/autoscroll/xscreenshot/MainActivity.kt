@@ -8,11 +8,18 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.Menu
+import android.view.MenuItem
+import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
+
+    companion object {
+        private const val MENU_ID_MANUAL_STITCH = 1001
+    }
 
     private lateinit var btnAccessibility: Button
     private lateinit var btnOverlay: Button
@@ -24,22 +31,13 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            // 1. 启动录屏前台服务
             val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
                 action = ScreenCaptureService.ACTION_START
                 putExtra("RESULT_CODE", result.resultCode)
                 putExtra("DATA", result.data)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(serviceIntent)
-            } else {
-                startService(serviceIntent)
-            }
-
-            // 2. 双重保障：直接由 Activity 唤起悬浮胶囊控制球
-            FloatingOverlayService.show(this)
-
-            Toast.makeText(this, "服务已启动，请切换到 X 应用！", Toast.LENGTH_SHORT).show()
+            startService(serviceIntent)
+            Toast.makeText(this, "截屏服务已就绪，请切换到 X 帖子页面", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -51,12 +49,42 @@ class MainActivity : AppCompatActivity() {
         updatePermissionStatus()
     }
 
+    /**
+     * 顶部菜单栏入口：点击可直接进入【批量导入连续截屏拼长图】
+     */
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, MENU_ID_MANUAL_STITCH, 0, "手动拼长图")
+            .setIcon(android.R.drawable.ic_menu_gallery)
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS or MenuItem.SHOW_AS_ACTION_WITH_TEXT)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == MENU_ID_MANUAL_STITCH) {
+            openManualStitchActivity()
+            return true
+        }
+        return super.onOptionsItemSelected(item)
+    }
+
+    private fun openManualStitchActivity() {
+        startActivity(Intent(this, ManualStitchActivity::class.java))
+    }
+
     private fun initViews() {
         btnAccessibility = findViewById(R.id.btnAccessibility)
         btnOverlay = findViewById(R.id.btnOverlay)
         btnStartService = findViewById(R.id.btnStartService)
         seekBottomCrop = findViewById(R.id.seekBottomCrop)
         tvBottomCropValue = findViewById(R.id.tvBottomCropValue)
+
+        // 若布局中含有手动拼图入口按钮，则绑定跳转事件
+        val manualBtnId = resources.getIdentifier("btnManualStitch", "id", packageName)
+        if (manualBtnId != 0) {
+            findViewById<View>(manualBtnId)?.setOnClickListener {
+                openManualStitchActivity()
+            }
+        }
 
         btnAccessibility.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -73,29 +101,19 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnStartService.setOnClickListener {
-            if (ScreenCaptureService.isRunning) {
-                // 如果截屏服务原本就在运行，直接重显悬浮窗，不需要重复请求系统录屏权限
-                FloatingOverlayService.show(this)
-                Toast.makeText(this, "悬浮控制球已恢复显示！", Toast.LENGTH_SHORT).show()
-            } else {
-                // 首次启动，调起系统录屏授权
-                val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                captureLauncher.launch(mpManager.createScreenCaptureIntent())
-            }
+            val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            captureLauncher.launch(mpManager.createScreenCaptureIntent())
         }
 
-        val prefs = getSharedPreferences("app_config", Context.MODE_PRIVATE)
-        val savedCrop = prefs.getInt("bottom_crop_px", 280)
+        val prefs = getSharedPreferences("x_screenshot_prefs", Context.MODE_PRIVATE)
+        val savedCrop = prefs.getInt("bottom_crop_px", 260)
         seekBottomCrop.progress = savedCrop
-        tvBottomCropValue.text = "底部避让高度: ${savedCrop} px (推荐 X 设为 260~320px)"
+        tvBottomCropValue.text = "底部避让高度: ${savedCrop} px (推荐 X 设为 260px)"
 
         seekBottomCrop.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                val actualValue = progress.coerceAtLeast(100)
-                tvBottomCropValue.text = "底部避让高度: ${actualValue} px (推荐 X 设为 260~320px)"
-                if (fromUser) {
-                    prefs.edit().putInt("bottom_crop_px", actualValue).apply()
-                }
+                tvBottomCropValue.text = "底部避让高度: ${progress} px (推荐 X 设为 260px)"
+                prefs.edit().putInt("bottom_crop_px", progress).apply()
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}

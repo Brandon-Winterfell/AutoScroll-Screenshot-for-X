@@ -1,7 +1,6 @@
 package com.autoscroll.xscreenshot
 
 import android.app.*
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -9,18 +8,16 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.net.Uri
 import android.os.*
-import android.provider.MediaStore
 import android.util.DisplayMetrics
 import android.view.WindowManager
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
-import java.io.OutputStream
+import java.util.concurrent.CopyOnWriteArrayList
 
 class ScreenCaptureService : Service() {
 
@@ -30,20 +27,21 @@ class ScreenCaptureService : Service() {
         const val NOTIFICATION_ID = 1001
         const val CHANNEL_ID = "screenshot_capture_channel"
 
-        var instance: ScreenCaptureService? = null
-            private set
         var isRunning = false
+            private set
+
+        var instance: ScreenCaptureService? = null
             private set
     }
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
+    private val capturedFrames = CopyOnWriteArrayList<Bitmap>()
+    private val scope = CoroutineScope(Dispatchers.Default + Job())
 
-    var screenWidth = 1080
-        private set
-    var screenHeight = 2400
-        private set
+    private var screenWidth = 1080
+    private var screenHeight = 2400
     private var screenDensity = 420
 
     override fun onCreate() {
@@ -51,6 +49,13 @@ class ScreenCaptureService : Service() {
         instance = this
         createNotificationChannel()
         readDisplayMetrics()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        instance = null
+        stopCapture()
+        scope.cancel()
     }
 
     private fun readDisplayMetrics() {
@@ -66,12 +71,7 @@ class ScreenCaptureService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 val resultCode = intent.getIntExtra("RESULT_CODE", Activity.RESULT_CANCELED)
-                val data: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra("DATA", Intent::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra("DATA")
-                }
+                val data = intent.getParcelableExtra<Intent>("DATA")
                 if (data != null && resultCode == Activity.RESULT_OK) {
                     startForegroundService(resultCode, data)
                 }
@@ -92,38 +92,23 @@ class ScreenCaptureService : Service() {
             .setOngoing(true)
             .build()
 
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
-
-            val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            mediaProjection = mpManager.getMediaProjection(resultCode, data)
-
-            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() {
-                    stopCapture()
-                }
-            }, Handler(Looper.getMainLooper()))
-
-            setupVirtualDisplay()
-            isRunning = true
-
-            FloatingOverlayService.show(this)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Handler(Looper.getMainLooper()).post {
-                Toast.makeText(applicationContext, "启动失败原因: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-            stopCapture()
-            stopSelf()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
         }
+
+        val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjection = mpManager.getMediaProjection(resultCode, data)
+        setupVirtualDisplay()
+        isRunning = true
+
+        // 启动浮动控制悬浮窗
+        FloatingOverlayService.show(this)
     }
 
     private fun setupVirtualDisplay() {
@@ -131,8 +116,9 @@ class ScreenCaptureService : Service() {
             screenWidth,
             screenHeight,
             PixelFormat.RGBA_8888,
-            3
+            2
         )
+
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "ScreenCapture",
             screenWidth,
@@ -147,81 +133,39 @@ class ScreenCaptureService : Service() {
 
     fun captureCurrentFrame(): Bitmap? {
         val image = imageReader?.acquireLatestImage() ?: return null
-        return try {
-            val planes = image.planes
-            val buffer = planes[0].buffer
-            val pixelStride = planes[0].pixelStride
-            val rowStride = planes[0].rowStride
-            val rowPadding = rowStride - pixelStride * screenWidth
+        val planes = image.planes
+        val buffer = planes[0].buffer
+        val pixelStride = planes[0].pixelStride
+        val rowStride = planes[0].rowStride
+        val rowPadding = rowStride - pixelStride * screenWidth
 
-            val bitmap = Bitmap.createBitmap(
-                screenWidth + rowPadding / pixelStride,
-                screenHeight,
-                Bitmap.Config.ARGB_8888
-            )
-            bitmap.copyPixelsFromBuffer(buffer)
+        val bitmap = Bitmap.createBitmap(
+            screenWidth + rowPadding / pixelStride,
+            screenHeight,
+            Bitmap.Config.ARGB_8888
+        )
+        bitmap.copyPixelsFromBuffer(buffer)
+        image.close()
 
-            if (rowPadding == 0) {
-                bitmap
-            } else {
-                val clean = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
-                bitmap.recycle()
-                clean
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        } finally {
-            image.close()
-        }
-    }
-
-    fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri? {
-        val filename = "X_LongScreenshot_${System.currentTimeMillis()}.png"
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Screenshots")
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
-            }
-        }
-
-        val resolver = context.contentResolver
-        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues) ?: return null
-
-        try {
-            resolver.openOutputStream(uri)?.use { out: OutputStream ->
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                contentValues.clear()
-                contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                resolver.update(uri, contentValues, null, null)
-            }
-            return uri
-        } catch (e: Exception) {
-            e.printStackTrace()
-            resolver.delete(uri, null, null)
-            return null
+        // 裁剪掉 padding
+        return if (rowPadding == 0) {
+            bitmap
+        } else {
+            val cleanBitmap = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
+            bitmap.recycle()
+            cleanBitmap
         }
     }
 
     private fun stopCapture() {
         isRunning = false
         virtualDisplay?.release()
-        imageReader?.close()
-        mediaProjection?.stop()
         virtualDisplay = null
+        imageReader?.close()
         imageReader = null
+        mediaProjection?.stop()
         mediaProjection = null
         FloatingOverlayService.hide(this)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        stopCapture()
-        instance = null
     }
 
     private fun createNotificationChannel() {

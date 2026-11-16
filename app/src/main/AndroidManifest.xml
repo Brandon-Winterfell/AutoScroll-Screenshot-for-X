@@ -2,15 +2,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.autoscroll.xscreenshot">
 
-    <!-- 悬浮窗权限 -->
+    <!-- 悬浮窗权限 (在 X 界面上方显示截屏胶囊) -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!-- 截屏录制前台服务权限 (Android 10+) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
+    <!-- 本地相册存储权限 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <application
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
         android:label="X 自动长截图"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MaterialComponents.DayNight.DarkActionBar">
 
@@ -22,6 +29,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 手动批量导入截屏拼长图页面 -->
+        <activity
+            android:name=".ManualStitchActivity"
+            android:label="批量导入拼长图"
+            android:parentActivityName=".MainActivity"
+            android:exported="false" />
 
         <!-- 无障碍自动滚动服务 -->
         <service
@@ -46,5 +60,6 @@
         <service
             android:name=".FloatingOverlayService"
             android:exported="false" />
+
     </application>
 </manifest>
