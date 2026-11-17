@@ -12,6 +12,7 @@ import android.provider.Settings
 import android.view.*
 import android.widget.*
 import kotlinx.coroutines.*
+import kotlin.math.abs
 
 class FloatingOverlayService : Service() {
 
@@ -40,6 +41,7 @@ class FloatingOverlayService : Service() {
     private var windowManager: WindowManager? = null
     private var floatView: View? = null
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var captureJob: Job? = null
     private var isCapturing = false
     private val capturedFrames = mutableListOf<Bitmap>()
 
@@ -62,6 +64,7 @@ class FloatingOverlayService : Service() {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
+        val metrics = resources.displayMetrics
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -69,12 +72,84 @@ class FloatingOverlayService : Service() {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            x = 30
+            gravity = Gravity.TOP or Gravity.START
+            x = (metrics.widthPixels * 0.42f).toInt().coerceAtLeast(24)
             y = 300
         }
 
-        val container = LinearLayout(this).apply {
+        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+        val container = object : LinearLayout(this) {
+            private var downRawX = 0f
+            private var downRawY = 0f
+            private var startX = 0
+            private var startY = 0
+            private var isDragging = false
+
+            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downRawX = ev.rawX
+                        downRawY = ev.rawY
+                        startX = params.x
+                        startY = params.y
+                        isDragging = false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (abs(ev.rawX - downRawX) > touchSlop || abs(ev.rawY - downRawY) > touchSlop) {
+                            isDragging = true
+                            return true
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        isDragging = false
+                    }
+                }
+                return super.onInterceptTouchEvent(ev)
+            }
+
+            override fun onTouchEvent(ev: MotionEvent): Boolean {
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downRawX = ev.rawX
+                        downRawY = ev.rawY
+                        startX = params.x
+                        startY = params.y
+                        isDragging = false
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = (ev.rawX - downRawX).toInt()
+                        val dy = (ev.rawY - downRawY).toInt()
+                        if (!isDragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                            isDragging = true
+                        }
+                        if (isDragging) {
+                            val screenMetrics = resources.displayMetrics
+                            val maxX = (screenMetrics.widthPixels - width).coerceAtLeast(0)
+                            val maxY = (screenMetrics.heightPixels - height).coerceAtLeast(0)
+                            params.x = (startX + dx).coerceIn(0, maxX)
+                            params.y = (startY + dy).coerceIn(0, maxY)
+                            try {
+                                windowManager?.updateViewLayout(this, params)
+                            } catch (_: Exception) {}
+                        }
+                        return true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        if (!isDragging) {
+                            performClick()
+                        }
+                        isDragging = false
+                        return true
+                    }
+                }
+                return super.onTouchEvent(ev)
+            }
+
+            override fun performClick(): Boolean {
+                return super.performClick()
+            }
+        }.apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(28, 18, 20, 18)
@@ -114,6 +189,7 @@ class FloatingOverlayService : Service() {
             setOnClickListener {
                 isShowing = false
                 isCapturing = false
+                captureJob?.cancel()
                 // 同步停止后台录屏前台服务并移除通知栏常驻提醒
                 ScreenCaptureService.stop(this@FloatingOverlayService)
                 stopSelf()
@@ -135,6 +211,34 @@ class FloatingOverlayService : Service() {
         }
     }
 
+    /**
+     * 隐藏悬浮球 -> 清空旧缓冲 -> 等待 SurfaceFlinger 重绘并输出纯净帧 -> 恢复悬浮球
+     */
+    private suspend fun captureCleanFrame(): Bitmap? {
+        val view = floatView
+        val captureService = ScreenCaptureService.instance ?: return null
+
+        // 先清掉隐藏悬浮球之前的残留帧，再隐藏悬浮球强制 VirtualDisplay 合成纯净画面
+        captureService.drainPendingFrames()
+        view?.visibility = View.INVISIBLE
+
+        return try {
+            // 等待按压水波纹消失及至少多个 VSync 周期完成无悬浮球合成
+            delay(260)
+
+            var frame = captureService.captureCurrentFrame()
+            if (frame == null) {
+                delay(120)
+                frame = captureService.captureCurrentFrame()
+            }
+            frame
+        } finally {
+            if (isShowing) {
+                view?.visibility = View.VISIBLE
+            }
+        }
+    }
+
     private fun toggleCaptureProcess(button: Button, statusText: TextView) {
         val accessibility = AutoScrollAccessibilityService.instance
         if (accessibility == null) {
@@ -147,17 +251,22 @@ class FloatingOverlayService : Service() {
             clearFrames()
             button.text = "完成并保存"
             (button.background as? GradientDrawable)?.setColor(Color.parseColor("#00BA7C"))
-            statusText.text = "采集中 (1)..."
+            statusText.text = "准备截屏..."
 
             val prefs = getSharedPreferences("x_screenshot_prefs", Context.MODE_PRIVATE)
-            val bottomExclusionPx = prefs.getInt("bottom_crop_px", 280)
+            val bottomExclusionPx = prefs.getInt("bottom_crop_px", 260)
             val topExclusionPx = 240
 
-            scope.launch {
-                // 采集首屏
-                delay(400)
-                ScreenCaptureService.instance?.captureCurrentFrame()?.let {
-                    capturedFrames.add(it)
+            captureJob?.cancel()
+            captureJob = scope.launch {
+                // 采集首屏（先隐藏悬浮球并等待干净帧）
+                captureCleanFrame()?.let { frame ->
+                    if (isCapturing) {
+                        capturedFrames.add(frame)
+                        statusText.text = "已采集 ${capturedFrames.size} 屏"
+                    } else {
+                        frame.recycle()
+                    }
                 }
 
                 while (isCapturing && isActive) {
@@ -177,23 +286,29 @@ class FloatingOverlayService : Service() {
                     val scrolled = scrollDeferred.await()
                     if (!scrolled || !isCapturing) break
 
-                    delay(900) // 等待滚动惯性与画面静止
+                    delay(800) // 等待滚动惯性与画面完全静止
                     if (!isCapturing) break
 
-                    ScreenCaptureService.instance?.captureCurrentFrame()?.let { frame ->
-                        capturedFrames.add(frame)
-                        statusText.text = "已采集 ${capturedFrames.size} 屏"
+                    captureCleanFrame()?.let { frame ->
+                        if (isCapturing) {
+                            capturedFrames.add(frame)
+                            statusText.text = "已采集 ${capturedFrames.size} 屏"
+                        } else {
+                            frame.recycle()
+                        }
                     }
                 }
             }
         } else {
             isCapturing = false
+            captureJob?.cancel()
+            floatView?.visibility = View.VISIBLE
             button.isEnabled = false
             button.text = "拼接中..."
             statusText.text = "正在合成长图..."
 
             val prefs = getSharedPreferences("x_screenshot_prefs", Context.MODE_PRIVATE)
-            val bottomCustomPx = prefs.getInt("bottom_crop_px", 280)
+            val bottomCustomPx = prefs.getInt("bottom_crop_px", 260)
 
             scope.launch {
                 val framesToStitch = capturedFrames.toList()

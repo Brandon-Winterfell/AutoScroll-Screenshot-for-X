@@ -162,7 +162,7 @@ class ScreenCaptureService : Service() {
             screenWidth,
             screenHeight,
             PixelFormat.RGBA_8888,
-            2
+            4
         )
 
         virtualDisplay = mediaProjection?.createVirtualDisplay(
@@ -175,6 +175,20 @@ class ScreenCaptureService : Service() {
             null,
             null
         )
+    }
+
+    /**
+     * 清空 ImageReader 中尚未消费的旧缓冲帧（防止截到隐藏悬浮球之前的残留画面）
+     */
+    fun drainPendingFrames() {
+        try {
+            var attempts = 0
+            while (attempts < 4) {
+                val stale = imageReader?.acquireLatestImage() ?: break
+                stale.close()
+                attempts++
+            }
+        } catch (_: Exception) {}
     }
 
     fun captureCurrentFrame(): Bitmap? {
