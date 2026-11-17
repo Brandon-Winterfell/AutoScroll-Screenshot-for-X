@@ -32,6 +32,15 @@ class ScreenCaptureService : Service() {
 
         var instance: ScreenCaptureService? = null
             private set
+
+        fun stop(context: Context) {
+            instance?.let {
+                it.stopCapture()
+                it.stopSelf()
+            } ?: run {
+                context.stopService(Intent(context, ScreenCaptureService::class.java))
+            }
+        }
     }
 
     private var mediaProjection: MediaProjection? = null
@@ -94,10 +103,21 @@ class ScreenCaptureService : Service() {
     }
 
     private fun startForegroundCapture(resultCode: Int, data: Intent) {
+        val stopIntent = Intent(this, ScreenCaptureService::class.java).apply {
+            action = ACTION_STOP
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            0,
+            stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("X 自动长截图进行中")
             .setContentText("正在监控屏幕内容并自动向下滚动截取...")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止截屏", stopPendingIntent)
             .setOngoing(true)
             .build()
 
@@ -201,6 +221,15 @@ class ScreenCaptureService : Service() {
         } catch (_: Exception) {}
         mediaProjectionCallback = null
         mediaProjection = null
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (_: Exception) {}
 
         FloatingOverlayService.hide(this)
     }

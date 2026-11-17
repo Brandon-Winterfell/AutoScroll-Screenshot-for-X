@@ -30,8 +30,10 @@ class FloatingOverlayService : Service() {
         }
 
         fun hide(context: Context) {
-            val intent = Intent(context, FloatingOverlayService::class.java)
-            context.stopService(intent)
+            if (isShowing) {
+                val intent = Intent(context, FloatingOverlayService::class.java)
+                context.stopService(intent)
+            }
         }
     }
 
@@ -110,6 +112,10 @@ class FloatingOverlayService : Service() {
             setTextColor(Color.parseColor("#A1A1AA"))
             setPadding(18, 6, 8, 6)
             setOnClickListener {
+                isShowing = false
+                isCapturing = false
+                // 同步停止后台录屏前台服务并移除通知栏常驻提醒
+                ScreenCaptureService.stop(this@FloatingOverlayService)
                 stopSelf()
             }
         }
