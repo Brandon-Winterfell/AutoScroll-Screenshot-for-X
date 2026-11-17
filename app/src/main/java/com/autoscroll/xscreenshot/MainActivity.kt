@@ -14,6 +14,7 @@ import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
@@ -36,7 +37,7 @@ class MainActivity : AppCompatActivity() {
                 putExtra("RESULT_CODE", result.resultCode)
                 putExtra("DATA", result.data)
             }
-            startService(serviceIntent)
+            ContextCompat.startForegroundService(this, serviceIntent)
             Toast.makeText(this, "截屏服务已就绪，请切换到 X 帖子页面", Toast.LENGTH_LONG).show()
         }
     }
@@ -101,8 +102,22 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnStartService.setOnClickListener {
-            val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            captureLauncher.launch(mpManager.createScreenCaptureIntent())
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "请先授予悬浮窗权限，再启动截屏悬浮控制球！", Toast.LENGTH_LONG).show()
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                startActivity(intent)
+                return@setOnClickListener
+            }
+
+            try {
+                val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                captureLauncher.launch(mpManager.createScreenCaptureIntent())
+            } catch (e: Exception) {
+                Toast.makeText(this, "无法发起截屏授权: ${e.message}", Toast.LENGTH_LONG).show()
+            }
         }
 
         val prefs = getSharedPreferences("x_screenshot_prefs", Context.MODE_PRIVATE)

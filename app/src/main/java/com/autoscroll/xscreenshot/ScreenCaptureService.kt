@@ -35,6 +35,7 @@ class ScreenCaptureService : Service() {
     }
 
     private var mediaProjection: MediaProjection? = null
+    private var mediaProjectionCallback: MediaProjection.Callback? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private val capturedFrames = CopyOnWriteArrayList<Bitmap>()
@@ -61,6 +62,7 @@ class ScreenCaptureService : Service() {
     private fun readDisplayMetrics() {
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(metrics)
         screenWidth = metrics.widthPixels
         screenHeight = metrics.heightPixels
@@ -71,9 +73,16 @@ class ScreenCaptureService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 val resultCode = intent.getIntExtra("RESULT_CODE", Activity.RESULT_CANCELED)
-                val data = intent.getParcelableExtra<Intent>("DATA")
+                val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra("DATA", Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra<Intent>("DATA")
+                }
                 if (data != null && resultCode == Activity.RESULT_OK) {
-                    startForegroundService(resultCode, data)
+                    startForegroundCapture(resultCode, data)
+                } else {
+                    stopSelf()
                 }
             }
             ACTION_STOP -> {
@@ -84,7 +93,7 @@ class ScreenCaptureService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startForegroundService(resultCode: Int, data: Intent) {
+    private fun startForegroundCapture(resultCode: Int, data: Intent) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("X 自动长截图进行中")
             .setContentText("正在监控屏幕内容并自动向下滚动截取...")
@@ -103,7 +112,24 @@ class ScreenCaptureService : Service() {
         }
 
         val mpManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = mpManager.getMediaProjection(resultCode, data)
+        val projection = mpManager.getMediaProjection(resultCode, data)
+        if (projection == null) {
+            stopSelf()
+            return
+        }
+        mediaProjection = projection
+
+        // Android 14 (API 34+) 强制要求在 createVirtualDisplay 前注册 Callback，否则直接抛出 IllegalStateException 崩溃
+        val callback = object : MediaProjection.Callback() {
+            override fun onStop() {
+                super.onStop()
+                stopCapture()
+                stopSelf()
+            }
+        }
+        mediaProjectionCallback = callback
+        projection.registerCallback(callback, Handler(Looper.getMainLooper()))
+
         setupVirtualDisplay()
         isRunning = true
 
@@ -159,12 +185,23 @@ class ScreenCaptureService : Service() {
 
     private fun stopCapture() {
         isRunning = false
-        virtualDisplay?.release()
+        try {
+            virtualDisplay?.release()
+        } catch (_: Exception) {}
         virtualDisplay = null
-        imageReader?.close()
+
+        try {
+            imageReader?.close()
+        } catch (_: Exception) {}
         imageReader = null
-        mediaProjection?.stop()
+
+        try {
+            mediaProjectionCallback?.let { mediaProjection?.unregisterCallback(it) }
+            mediaProjection?.stop()
+        } catch (_: Exception) {}
+        mediaProjectionCallback = null
         mediaProjection = null
+
         FloatingOverlayService.hide(this)
     }
 

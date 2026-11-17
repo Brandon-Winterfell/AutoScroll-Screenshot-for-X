@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.*
+import android.provider.Settings
 import android.view.*
 import android.widget.*
 import kotlinx.coroutines.*
@@ -18,6 +19,10 @@ class FloatingOverlayService : Service() {
         private var isShowing = false
 
         fun show(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+                Toast.makeText(context, "请先授予悬浮窗权限！", Toast.LENGTH_LONG).show()
+                return
+            }
             if (!isShowing) {
                 val intent = Intent(context, FloatingOverlayService::class.java)
                 context.startService(intent)
@@ -38,9 +43,13 @@ class FloatingOverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "未获得悬浮窗显示权限，请先开启权限", Toast.LENGTH_LONG).show()
+            stopSelf()
+            return
+        }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         initFloatingView()
-        isShowing = true
     }
 
     private fun initFloatingView() {
@@ -109,8 +118,15 @@ class FloatingOverlayService : Service() {
         container.addView(actionBtn)
         container.addView(closeBtn)
 
-        floatView = container
-        windowManager?.addView(floatView, params)
+        try {
+            windowManager?.addView(container, params)
+            floatView = container
+            isShowing = true
+        } catch (e: Exception) {
+            Toast.makeText(this, "悬浮窗启动失败: ${e.message}", Toast.LENGTH_LONG).show()
+            isShowing = false
+            stopSelf()
+        }
     }
 
     private fun toggleCaptureProcess(button: Button, statusText: TextView) {
@@ -222,7 +238,13 @@ class FloatingOverlayService : Service() {
         isShowing = false
         isCapturing = false
         clearFrames()
-        floatView?.let { windowManager?.removeView(it) }
+        floatView?.let {
+            try {
+                if (it.isAttachedToWindow) {
+                    windowManager?.removeView(it)
+                }
+            } catch (_: Exception) {}
+        }
         floatView = null
         scope.cancel()
     }
